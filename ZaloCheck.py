@@ -9,6 +9,7 @@ import re
 import base64
 import openpyxl
 import uuid
+from selenium import webdriver
 
 # ---------------------------
 # PHẦN ĐĂNG NHẬP (Login)
@@ -759,22 +760,19 @@ class SettingsPage(ctk.CTkFrame):
         self.btn_save = ctk.CTkButton(self, text="Save", fg_color="#1E40AF", command=self.save_settings)
         self.btn_save.place(x=20, y=170)
 
-    def input_cookie(self):
-        file_path = filedialog.askopenfilename(title="Chọn file cookie", filetypes=(("Text files", "*.txt"), ("All files", "*.*")))
-        if file_path:
-            self.cookie_file_path = file_path
-            self.lbl_cookie_path.configure(text=file_path)
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    lines = f.read().splitlines()
-                    if len(lines) >= 2:
-                        global ORIGINAL_COOKIE, ORIGINAL_TOKEN
-                        ORIGINAL_COOKIE = lines[0]
-                        ORIGINAL_TOKEN = lines[1]
-                    else:
-                        messagebox.showerror("Lỗi", "File cookie phải có ít nhất 2 dòng: dòng 1 cookie, dòng 2 token")
-            except Exception as e:
-                messagebox.showerror("Lỗi", f"Không thể đọc file cookie: {e}")
+    def input_cookie_file():
+    file_path = filedialog.askopenfilename(title="Chọn file cookie (.txt)", filetypes=[("Text files", "*.txt")])
+    if file_path:
+        with open(file_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        if len(lines) < 2:
+            messagebox.showerror("Lỗi", "File không đủ dữ liệu (cần 2 dòng)")
+        else:
+            global ORIGINAL_COOKIE, ORIGINAM_TOKEN
+            ORIGINAL_COOKIE = lines[0].strip()
+            ORIGINAM_TOKEN = lines[1].strip()
+            messagebox.showinfo("Thành công", "Cookie và Token đã được cập nhật")
+
 
     def input_proxy(self):
         file_path = filedialog.askopenfilename(title="Chọn file proxy", filetypes=(("Text files", "*.txt"), ("All files", "*.*")))
@@ -843,7 +841,6 @@ def get_zalo_info(sdt, captcha_uuid=None, proxy=None):
     else:
         return {"captcha_required": False, "html": html}
 
-
 def get_captcha(proxy=None):
     url = "https://zcaptcha.api.zaloapp.com/api/get-captcha"
     headers = {
@@ -851,7 +848,7 @@ def get_captcha(proxy=None):
         "Content-Type": "application/json",
         "Cookie": ORIGINAL_COOKIE,
         "Accept-Language": "vi-VN,vi;q=0.9",
-        "csrf-token": ORIGINAL_TOKEN
+        "csrf-token": ORIGINAM_TOKEN
     }
     data = {}
     try:
@@ -868,11 +865,10 @@ def get_captcha(proxy=None):
             image_data = data.get("image", {})
             return {
                 "url": image_data.get("url"),
-                "token": data.get("token"),
+                "token": image_data.get("token"),
                 "question": data.get("question")
             }
     return None
-
 
 def solve_captcha(image_url, question, proxy=None):
     try:
@@ -888,10 +884,8 @@ def solve_captcha(image_url, question, proxy=None):
     API_KEY = "AIzaSyCfnPZg0yVDm9YHP2SoeRNxRJACvuwuXtE"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={API_KEY}"
     headers = {"Content-Type": "application/json"}
-    text_prompt = (
-        f"Tôi cần bạn trả lời bằng tiếng việt: {question}, trong ảnh sẽ có tổng 9 bức ảnh và bức ảnh bạn chọn lần lượt là số mấy, "
-        "tôi cần bạn trả lời mặc định chỉ hiển thị mỗi số thứ tự bức ảnh mà bạn chọn"
-    )
+    text_prompt = (f"Tôi cần bạn trả lời bằng tiếng việt: {question}, trong ảnh sẽ có tổng 9 bức ảnh và bức ảnh bạn chọn lần lượt là số mấy, "
+                   "tôi cần bạn trả lời mặc định chỉ hiển thị mỗi số thứ tự bức ảnh mà bạn chọn")
     data = {
         "contents": [
             {
@@ -917,13 +911,12 @@ def solve_captcha(image_url, question, proxy=None):
             return None
     return None
 
-
 def check_captcha(token, answer_str, proxy=None):
     try:
         selected = [int(x) for x in answer_str.replace(" ", "").split(",")]
     except Exception:
         return None
-    answers = [True if pos in selected else False for pos in range(1, 10)]
+    answers = [(True if pos in selected else False) for pos in range(1, 10)]
     url = "https://zcaptcha.api.zaloapp.com/api/check-captcha"
     headers = {
         "Accept": "application/json, text/plain, */*",
@@ -932,7 +925,7 @@ def check_captcha(token, answer_str, proxy=None):
         "Connection": "keep-alive",
         "Content-Type": "application/json",
         "Cookie": ORIGINAL_COOKIE,
-        "csrf-token": ORIGINAL_TOKEN,
+        "csrf-token": ORIGINAM_TOKEN,
         "Host": "zcaptcha.api.zaloapp.com",
         "Origin": "https://zcaptcha.api.zaloapp.com",
         "Referer": "https://zcaptcha.api.zaloapp.com/zcaptcha-challenge?appId=3032357805345395173&lang=vi",
@@ -962,66 +955,60 @@ def check_captcha(token, answer_str, proxy=None):
             return uuid_value
     return None
 
-
 def check_zalo_account(sdt):
-    info = get_zalo_info(sdt)
+    # Nếu sử dụng proxy, lấy proxy mới cho mỗi request
+    proxy_used = get_next_proxy() if USE_PROXY else None
+    info = get_zalo_info(sdt, proxy=proxy_used)
     if not info["captcha_required"]:
         html = info["html"]
         if '<meta property="og:title" content="Zalo - Tài khoản bị khóa" />' in html:
-            return {"status": "Khoá", "ten": "", "proxy": "KHÔNG DÙNG PROXY"}
+            return {"status": "Khoá", "ten": "", "proxy": proxy_used["http"] if proxy_used else "KHÔNG DÙNG PROXY"}
         elif '<figcaption>Tài khoản này tạm thời không thể sử dụng chức năng này</figcaption>' in html:
-            return {"status": "VHH", "ten": "", "proxy": "KHÔNG DÙNG PROXY"}
+            return {"status": "VHH", "ten": "", "proxy": proxy_used["http"] if proxy_used else "KHÔNG DÙNG PROXY"}
         elif '<figcaption>Tài khoản này không tồn tại hoặc không cho phép tìm kiếm</figcaption>' in html:
-            return {"status": "Die", "ten": "", "proxy": "KHÔNG DÙNG PROXY"}
+            return {"status": "Die", "ten": "", "proxy": proxy_used["http"] if proxy_used else "KHÔNG DÙNG PROXY"}
         else:
             match = re.search(r'<meta property="og:title" content="Zalo - (.+?)" />', html)
             if match:
                 ten = match.group(1)
-                return {"status": "Live", "ten": ten, "proxy": "KHÔNG DÙNG PROXY"}
+                return {"status": "Live", "ten": ten, "proxy": proxy_used["http"] if proxy_used else "KHÔNG DÙNG PROXY"}
             else:
-                return {"status": "Không xác định", "ten": "", "proxy": "KHÔNG DÙNG PROXY"}
+                return {"status": "Không xác định", "ten": "", "proxy": proxy_used["http"] if proxy_used else "KHÔNG DÙNG PROXY"}
     else:
-        # Nếu gặp captcha, thực hiện quy trình giải captcha cho đến thành công.
-        while True:
-            proxy_captcha = get_next_proxy() if USE_PROXY else None
-            cap_data = get_captcha(proxy=proxy_captcha)
-            if not cap_data:
-                continue  # Lấy captcha thất bại, thử lại từ đầu
-
-            image_url = cap_data["url"]
-            question = cap_data["question"]
-            token = cap_data["token"]
-
-            proxy_solve = get_next_proxy() if USE_PROXY else None
-            answer_str = solve_captcha(image_url, question, proxy=proxy_solve)
-            if not answer_str:
-                continue  # Giải captcha thất bại, thử lại từ đầu
-
-            proxy_check = get_next_proxy() if USE_PROXY else None
-            uuid_value = check_captcha(token, answer_str, proxy=proxy_check)
-            if not uuid_value:
-                continue  # Kiểm tra captcha thất bại, thử lại từ đầu
-
-            proxy_final = get_next_proxy() if USE_PROXY else None
-            info = get_zalo_info(sdt, captcha_uuid=uuid_value, proxy=proxy_final)
-            # Nếu sau giải captcha API vẫn yêu cầu captcha, thử lại.
-            if info["captcha_required"]:
-                continue
+        # Nếu captcha yêu cầu, sử dụng proxy riêng cho từng bước
+        proxy_captcha = get_next_proxy() if USE_PROXY else None
+        cap_data = get_captcha(proxy=proxy_captcha)
+        if not cap_data:
+            return {"status": "Captcha Lỗi", "ten": "", "proxy": proxy_captcha["http"] if proxy_captcha else "KHÔNG DÙNG PROXY"}
+        image_url = cap_data["url"]
+        question = cap_data["question"]
+        token = cap_data["token"]
+        proxy_solve = get_next_proxy() if USE_PROXY else None
+        answer_str = solve_captcha(image_url, question, proxy=proxy_solve)
+        if not answer_str:
+            return {"status": "Captcha Lỗi", "ten": "", "proxy": proxy_solve["http"] if proxy_solve else "KHÔNG DÙNG PROXY"}
+        proxy_check = get_next_proxy() if USE_PROXY else None
+        uuid_value = check_captcha(token, answer_str, proxy=proxy_check)
+        if not uuid_value:
+            return {"status": "Captcha Lỗi", "ten": "", "proxy": proxy_check["http"] if proxy_check else "KHÔNG DÙNG PROXY"}
+        # Sau captcha, lấy proxy mới cho lần request cuối
+        proxy_final = get_next_proxy() if USE_PROXY else None
+        info = get_zalo_info(sdt, captcha_uuid=uuid_value, proxy=proxy_final)
+        html = info["html"]
+        if '<meta property="og:title" content="Zalo - Tài khoản bị khóa" />' in html:
+            return {"status": "Khoá", "ten": "", "proxy": proxy_final["http"] if proxy_final else "KHÔNG DÙNG PROXY"}
+        elif '<figcaption>Tài khoản này tạm thời không thể sử dụng chức năng này</figcaption>' in html:
+            return {"status": "VHH", "ten": "", "proxy": proxy_final["http"] if proxy_final else "KHÔNG DÙNG PROXY"}
+        elif '<figcaption>Tài khoản này không tồn tại hoặc không cho phép tìm kiếm</figcaption>' in html:
+            return {"status": "Die", "ten": "", "proxy": proxy_final["http"] if proxy_final else "KHÔNG DÙNG PROXY"}
+        else:
+            match = re.search(r'<meta property="og:title" content="Zalo - (.+?)" />', html)
+            if match:
+                ten = match.group(1)
+                return {"status": "Live", "ten": ten, "proxy": proxy_final["http"] if proxy_final else "KHÔNG DÙNG PROXY"}
             else:
-                html = info["html"]
-                if '<meta property="og:title" content="Zalo - Tài khoản bị khóa" />' in html:
-                    return {"status": "Khoá", "ten": "", "proxy": proxy_final["http"] if proxy_final else "KHÔNG DÙNG PROXY"}
-                elif '<figcaption>Tài khoản này tạm thời không thể sử dụng chức năng này</figcaption>' in html:
-                    return {"status": "VHH", "ten": "", "proxy": proxy_final["http"] if proxy_final else "KHÔNG DÙNG PROXY"}
-                elif '<figcaption>Tài khoản này không tồn tại hoặc không cho phép tìm kiếm</figcaption>' in html:
-                    return {"status": "Die", "ten": "", "proxy": proxy_final["http"] if proxy_final else "KHÔNG DÙNG PROXY"}
-                else:
-                    match = re.search(r'<meta property="og:title" content="Zalo - (.+?)" />', html)
-                    if match:
-                        ten = match.group(1)
-                        return {"status": "Live", "ten": ten, "proxy": proxy_final["http"] if proxy_final else "KHÔNG DÙNG PROXY"}
-                    else:
-                        return {"status": "Không xác định", "ten": "", "proxy": proxy_final["http"] if proxy_final else "KHÔNG DÙNG PROXY"}
+                return {"status": "Không xác định", "ten": "", "proxy": proxy_final["http"] if proxy_final else "KHÔNG DÙNG PROXY"}
+
 
 
 
